@@ -2,6 +2,105 @@
 
 Flask API for pothole detection, volume estimation, and Google Sheets logging.
 
+---
+
+## For the Model / Dataset Owner
+
+> **If you trained the YOLOv8 model and just need to plug it in, read this section.**
+
+### 1. Drop your weights file into `backend/`
+
+After training, export your best weights as a `.pt` file (YOLOv8 PyTorch format) and copy it here:
+
+```
+backend/
+└── best.pt          ← place your trained weights here
+```
+
+Any filename works — you just tell the app where it is via `.env` (see step 2).
+
+### 2. Set environment variables
+
+Open (or create) `backend/.env` and set:
+
+```env
+YOLO_WEIGHTS=best.pt        # filename of your weights file (relative to backend/)
+YOLO_CLASS_ID=0             # the class index your model uses for "pothole"
+                            # — check your dataset's data.yaml: names[0] should be "pothole"
+```
+
+`YOLO_CLASS_ID=0` is the standard for every public pothole dataset on Roboflow. If your `data.yaml` has pothole at a different index, update this accordingly.
+
+### 3. How your model is used (the inference pipeline)
+
+```
+ESP32-CAM image (JPEG bytes)
+        │
+        ▼
+utils/yolo_runner.py  ──► loads your best.pt once (lazy, cached)
+        │                   runs model(img_array)
+        │                   filters boxes: conf ≥ 0.3  AND  cls == YOLO_CLASS_ID
+        │                   returns list of { area_px, confidence, bbox }
+        ▼
+routes/detect.py      ──► picks the largest detection (highest area_px)
+        │
+        ▼
+utils/estimator.py    ──► converts area_px + depth_mm → volume
+        │                   area_m2 = area_px × (PX_TO_MM)²  / 1_000_000
+        │                   volume  = area_m2 × depth_m × 0.7
+        ▼
+Google Sheets + JSON response
+```
+
+### 4. Confidence threshold
+
+In `utils/yolo_runner.py` line ~44:
+
+```python
+if conf < 0.3:
+    continue
+```
+
+Default is **0.3**. If your model is well-trained and you want fewer false positives, raise it to `0.5`. Edit directly in the file.
+
+### 5. Pixel-to-mm calibration
+
+In `utils/estimator.py`:
+
+```python
+PX_TO_MM = 0.5   # mm per pixel at ~30 cm camera height
+```
+
+This converts the bounding-box pixel area into real-world area. It was set assuming the camera sits ~30 cm above the road. If your dataset was captured at a different mounting height, adjust this constant — place a card of known size (e.g. A4 = 210 × 297 mm) flat on the ground, run an image through the API, and tune `PX_TO_MM` until the reported `area_m2` is correct.
+
+### 6. Quick sanity check
+
+Once the server is running, you can test your model directly with curl:
+
+```powershell
+curl -X POST http://localhost:5000/api/detect `
+  -F "image=@test_pothole.jpg" `
+  -F "depth_mm=80"
+```
+
+Expected response shape:
+
+```json
+{
+    "status": "pothole_detected",
+    "area_m2": 0.042,
+    "depth_m": 0.08,
+    "volume_m3": 0.00235,
+    "volume_liters": 2.35,
+    "confidence": 0.87,
+    "annotated_image": "<base64 JPEG>"
+}
+```
+
+If you get `"status": "no_pothole"`, the model either didn't detect anything above the confidence threshold or the class ID doesn't match — double-check `YOLO_CLASS_ID` and your `data.yaml`.
+
+---
+
 ## Stack
 
 - Python 3.12
@@ -21,8 +120,8 @@ backend/
 │   ├── detect.py           # POST /api/detect
 │   └── logs.py             # GET  /api/logs
 └── utils/
-    ├── yolo_runner.py      # YOLO inference
-    ├── estimator.py        # volume math (A x Z x 0.7)
+    ├── yolo_runner.py      # YOLO inference  ← loads your weights
+    ├── estimator.py        # volume math (A x Z x 0.7)  ← tune PX_TO_MM here
     └── sheets.py           # Google Sheets read/write
 ```
 
