@@ -1,6 +1,6 @@
 from flask import Blueprint, request, jsonify
 from utils.estimator import estimate_volume
-from utils.material_estimator import estimate_repair
+from utils.material_estimator import estimate_repair, predict_materials_ml, estimate_cost
 from utils.sheets import append_to_sheet
 from utils.yolo_runner import run_inference
 import base64, time
@@ -38,12 +38,16 @@ def detect():
             confidence=best["confidence"],
         )
 
-        repair = estimate_repair(
+        # Use ML-based material prediction (falls back to rule-based if ML unavailable)
+        materials = predict_materials_ml(
             area_m2=vol["area_m2"],
             depth_m=vol["depth_m"],
-            volume_m3=vol["volume_m3"],
             volume_liters=vol["volume_liters"],
         )
+        
+        # Calculate cost based on materials and severity
+        severity = materials.get('severity', 'MEDIUM')
+        cost = estimate_cost(materials, severity)
 
         payload = {
             "status": "pothole_detected",
@@ -57,10 +61,20 @@ def detect():
             "volume_min_liters": vol["volume_min_liters"],
             "volume_max_liters": vol["volume_max_liters"],
             "confidence": best["confidence"],
-            "severity": repair["severity"],
-            "repair_method": repair["repair_method"],
-            "materials": repair["materials"],
-            "estimated_cost_inr": repair["estimated_cost_inr"],
+            "severity": severity,
+            "repair_method": {
+                "LOW": "Surface patch / slurry seal",
+                "MEDIUM": "Throw-and-roll patch",
+                "HIGH": "Full-depth semi-permanent patch",
+                "CRITICAL": "Full-depth patch with base repair",
+            }.get(severity, "Unknown"),
+            "materials": {
+                "hotmix_kg": materials["hotmix_kg"],
+                "tack_coat_liters": materials["tack_coat_liters"],
+                "aggregate_base_kg": materials["aggregate_base_kg"],
+            },
+            "estimated_cost_inr": cost,
+            "prediction_source": materials.get("prediction_source", "RULE_BASED"),
             "annotated_image": annotated_b64,
         }
 
