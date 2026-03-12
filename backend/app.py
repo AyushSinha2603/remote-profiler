@@ -10,6 +10,10 @@ from routes.test import test_bp
 app = Flask(__name__)
 CORS(app)
 
+@app.get("/")
+def index():
+    return {"message": "Hello, World!"}
+
 app.register_blueprint(detect_bp, url_prefix="/api")
 app.register_blueprint(logs_bp, url_prefix="/api")
 app.register_blueprint(test_bp, url_prefix="/api")

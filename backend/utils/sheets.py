@@ -85,4 +85,11 @@ def fetch_all_logs() -> list[dict]:
     """Fetch all rows from the sheet as list of dicts."""
     sheet = _get_sheet()
     records = sheet.get_all_records()
-    return records
+    
+    valid_records = []
+    for r in records:
+        if r.get("lat") == "lat" or r.get("timestamp") == "timestamp":
+            continue
+        valid_records.append(r)
+        
+    return valid_records
